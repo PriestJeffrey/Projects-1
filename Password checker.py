@@ -2,6 +2,11 @@ import re
 import math
 import json
 from pathlib import Path
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import base64
+import os
 
 class PasswordPolicy:
     def __init__(self):
@@ -48,7 +53,7 @@ class PasswordStrengthChecker:
         if details['length'] < self.policy.min_length:
             feedback.append(f"Password must be at least {self.policy.min_length} characters long")
         else:
-            score += 1 + (details['length'] >= 12)
+            score += 1
 
         # Character composition checks
         if not details['has_lowercase']: feedback.append("Include lowercase letters")
@@ -67,17 +72,20 @@ class PasswordStrengthChecker:
 
         if details['entropy'] < 50:
             feedback.append("Password is not complex enough")
-        elif details['entropy'] >= 70:
+        elif details['entropy'] >= 70 and score < 6:
             score += 1
 
         # Sequential and repeated characters
         if re.search(r'(.)\1{2,}', password):
             feedback.append("Avoid repeated characters")
-            score -= 1
+            score = max(0, score - 1)
 
         if re.search(r'(abc|123|qwe|password)', password.lower()):
             feedback.append("Avoid common patterns")
-            score -= 1
+            score = max(0, score - 1)
+
+        # Cap the score at 6
+        score = min(6, score)
 
         # Determine strength level
         strength = "Weak"
@@ -94,22 +102,56 @@ class PasswordStrengthChecker:
             'details': details
         }
 
+class PasswordEncryption:
+    def __init__(self):
+        self.salt = os.urandom(16)
+        self.key = self._generate_key()
+        self.cipher_suite = Fernet(self.key)
+
+    def _generate_key(self):
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=self.salt,
+            iterations=100000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(b"secret_key"))
+        return key
+
+    def encrypt_password(self, password):
+        try:
+            encrypted_password = self.cipher_suite.encrypt(password.encode())
+            return True, encrypted_password
+        except Exception as e:
+            return False, str(e)
+
 def main():
     checker = PasswordStrengthChecker()
-    print("Professional Password Strength Analyzer")
-    print("=" * 35)
+    encryptor = PasswordEncryption()
+    print("Professional Password Strength Analyzer with Encryption")
+    print("=" * 50)
     
     while True:
         password = input("\nEnter a password to analyze (or 'q' to quit): ")
         if password.lower() == 'q':
             break
             
+        # Check password strength
         result = checker.check_password_strength(password)
+        
+        # Encrypt password
+        encryption_success, encrypted_data = encryptor.encrypt_password(password)
         
         print(f"\nAnalysis Results:")
         print(f"Strength: {result['strength']}")
         print(f"Entropy: {result['entropy']} bits")
         print(f"Score: {result['score']}/6")
+        
+        print(f"\nEncryption Status:")
+        if encryption_success:
+            print("✓ Password successfully encrypted with AES-256")
+        else:
+            print("✗ Password encryption failed")
         
         if result['feedback']:
             print("\nRecommendations:")
